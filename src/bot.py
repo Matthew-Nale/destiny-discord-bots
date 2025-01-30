@@ -19,7 +19,7 @@ DEFAULT_VC = os.getenv('DEFAULT_VOICE_CHANNEL_ID')
 
 MAX_LEN = 1024 # Setting character limit for ElevenLabs
 MAX_TOKENS = 128 # Setting token limit for ChatGPT responses
-CHAT_MODEL = "gpt-3.5-turbo" # Model for OpenAI Completions to use
+CHAT_MODEL = "gpt-4o-2024-08-06" # Model for OpenAI Completions to use
 
 #? Bot Classes
 
@@ -139,7 +139,7 @@ class VoiceCommands:
             vc.stop()
             await vc.disconnect()
             
-            await interaction.followup.send(file=discord.File(filename))
+            await interaction.followup.send(file=discord.File(audio))
             log.write(f'/vc_speak for {self.name}: Sent .mp3 titled `{filename}`.\n\n')
             os.remove(filename)
         except Exception as e:

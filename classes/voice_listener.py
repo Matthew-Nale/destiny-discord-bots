@@ -11,7 +11,7 @@ import subprocess
 import random
 import json
 
-from src.bot import Bot
+from bot_manager import BotManager
 from discord.opus import Encoder
 from discord import app_commands
 from datetime import datetime
@@ -70,63 +70,22 @@ class StreamingAudio(discord.AudioSource):
 
 class VoiceRecording(commands.Cog):    
     
-    voice_packets = {}
-    audio_files = {}
-    transcription = []
-    voice_channel = None
-    bot : Bot = None
-    daily_manual_joins = 0
-    registered_users = []
-    
-    def __init__(self, bot: Bot):
+    def __init__(self, bot: BotManager):
         self.bot = bot
         self.join_conversation.start()
-        self.last_join = datetime(2000, 1, 1)
-
-
-    @app_commands.command(name="voice_chat", description="Manually force the bot to join your VC for a chat")
-    async def force_join(self, interaction: discord.Interaction):
-        await interaction.response.defer()
-        try:
-            if self.daily_manual_joins > MAX_JOIN_LIMIT:
-                await interaction.followup.send("Already joined 3 times today, please wait a day.", ephemeral=True)
-                return
-                
-            with open("data/voice_conversations.json", "r") as f:
-                registered_users = json.load(f)["registered_users"]
-            
-            if interaction.user.id not in registered_users:
-                await interaction.followup.send("You must be a voice registered user to perform this command. Please register first")
-                return
-            
-            self.last_join = datetime.now()
-            self.voice_channel = await interaction.user.voice.channel.connect(cls=voice_recv.VoiceRecvClient)
-            self.daily_manual_joins += 1
-            
-            for _ in range(0, 3):
-                await self.listen_for(LISTEN_TIME)
-                
-                await self.transcribe_audio()
-                response = await self.generate_response()
-                await self.create_audio(response)
-                self.voice_channel.stop_listening()
-            
-            await self.voice_channel.disconnect()
-            await self.cleanup()
-            self.voice_channel = None
-            self.transcription = []
-            
-            await interaction.followup.delete()
-        except:
-            await interaction.followup.send('Encountered an error, try again later.', ephemeral=True)
+        with open('data/voice_conversations.json', "r") as f:
+                self.registered_users = json.load(f)["registered_users"]
         
 
-    @tasks.loop(minutes=20)
+    @tasks.loop(minutes=40)
     async def join_conversation(self):
         try:
             active_voice_channel = await self.get_active_vc()
+            
             if await self.can_join(active_voice_channel):
-                self.last_join = datetime.now()
+                self.voice_packets = {}
+                self.audio_files = {}
+                self.transcription = []
                 self.voice_channel = await active_voice_channel.connect(cls=voice_recv.VoiceRecvClient)
                 
                 for _ in range(0, random.randint(MIN_LISTENS, MAX_LISTENS)):
@@ -134,62 +93,47 @@ class VoiceRecording(commands.Cog):
                     
                     await self.transcribe_audio()
                     response = await self.generate_response()
-                    await self.create_audio(response)
+                    await self.play_audio(response)
                     self.voice_channel.stop_listening()
                 
-                self.voice_channel.stop_listening()
-                await self.voice_channel.disconnect()
                 await self.cleanup()
-                self.voice_channel = None
-                self.transcription = []
         except Exception as e:
-            with open('log.txt', 'a') as f:
-                f.write(f'Encountered an error in joining conversation: {e}\n\n')
+            self.bot.log_handler.error(f'Encountered an error in joining conversation: {e}')
+        
+        await self.voice_channel.disconnect()
     
     
     async def can_join(self, active_voice_channel) -> bool:
-        try:
-            if active_voice_channel is None or self.voice_channel is not None:
-                return False
-            
-            if random.random() >= JOIN_CHANCE:
-                return False
-            if (datetime.now() - self.last_join).total_seconds() < (COOLDOWN_TIME_HOURS * 3600):
-                return False
-
-            return True
-        except:
+        if active_voice_channel is None or random.random() < JOIN_CHANCE:
             return False
+        return True
         
-        
+
     async def get_active_vc(self):
         try:
-            with open('data/voice_conversations.json', "r") as f:
-                registered_users = json.load(f)["registered_users"]
-                
-            for server in self.bot.bot.guilds:
+            valid_channels = []
+            for server in self.bot.guilds:
                 for channel in server.voice_channels:
-                    enabled_users = [member for member in channel.members if member.id in registered_users]
-                    if len(enabled_users) > 0:
-                        return channel
-            return None
+                    if len([member for member in channel.members if member.id in self.registered_users]) > 0:
+                        valid_channels.append(channel)
+            
+            return random.choice(valid_channels)
         except:
             return None
 
 
-    async def listen_for(self, t):
-        with open('data/voice_conversations.json', 'r') as f:
-            registered_users = json.load(f)["registered_users"]
-            
-        def save(user, data: voice_recv.VoiceData):
-            if data.source.id in registered_users:
+    async def listen_for(self, time):
+
+        def save(data: voice_recv.VoiceData):
+            if data.source.id in self.registered_users:
                 self.voice_packets[data.source.display_name].append(data)
         
         for member in self.voice_channel.channel.members:
             self.voice_packets[member.display_name] = []
+            
         self.voice_channel.listen(voice_recv.BasicSink(save))
         
-        await asyncio.sleep(t)
+        await asyncio.sleep(time)
     
     
     async def transcribe_audio(self):
@@ -216,19 +160,15 @@ class VoiceRecording(commands.Cog):
                         file=file
                     ).text})
         except Exception as e:
-            with open('log.txt', 'a') as f:
-                f.write(f'Encountered an error when transcibing audio:\n{e}\n\n')
+            self.bot.log_handler.error(f'Encountered an error when transcibing audio:\n{e}')
     
     
     async def cleanup(self):
         try:
-            self.voice_packets = {}
             for file in self.audio_files.values():
                 os.remove(file)
-            self.audio_files = {}
         except Exception as e:
-            with open('log.txt', 'a') as f:
-                f.write(f'Encountered an error when cleaning up files:\n{e}\n\n')
+            self.bot.log_handler.error(f'Encountered an error when cleaning up files:\n{e}')
     
     
     async def generate_response(self):
@@ -243,30 +183,19 @@ class VoiceRecording(commands.Cog):
                     else:
                         messages.append({"role": "assistant", "content": text})
             
-            response = openai.chat.completions.create(
-                    model="gpt-4o-2024-08-06",
-                    messages=messages,
-                    n=1,
-                    stream=True
-                )
-            
-            response_text = ""
-            for chunk in response:
-                if chunk.choices[0].delta.content is not None:
-                    response_text += chunk.choices[0].delta.content
+            response = self.bot.text_handler.generate(messages)
                     
-            self.transcription.append({self.bot.name: response_text})
+            self.transcription.append({self.bot.name: response})
             
-            return response_text
+            return response
         except Exception as e:
-            with open('log.txt', 'a') as f:
-                f.write(f'Encountered an exception when generating a text response:\n{e}\n\n')
+            self.bot.log_handler.error(f'Encountered an exception when generating a text response:\n{e}')
 
 
-    async def create_audio(self, response):
+    async def play_audio(self, response):
         try:
             body = {'text': response,
-                    'model_id': self.bot.voice.voice_model,
+                    'model_id': self.bot.voice_model,
                     'voice_settings': {'stability': 0.15,
                                     'similarity_boost': 0.7,
                                     'style': 0.1,
@@ -275,8 +204,8 @@ class VoiceRecording(commands.Cog):
                     }
             
             async with aiohttp.ClientSession() as session:
-                async with session.post(url='https://api.elevenlabs.io/v1/text-to-speech/' + self.bot.voice.elevenlabs.voice['voice_id'] + '/stream?optimize_streaming_latency=4',
-                                        headers={'XI-API-KEY': self.bot.voice.elevenlabs.api_key},
+                async with session.post(url='https://api.elevenlabs.io/v1/text-to-speech/' + self.bot.voice_handler.voice['voice_id'] + '/stream?optimize_streaming_latency=3',
+                                        headers={'XI-API-KEY': self.bot.voice_handler.api_key},
                                         json=body) as r:
                     content = io.BytesIO(await r.read())
                     self.voice_channel.play(StreamingAudio(content.read(), pipe=True))
@@ -285,5 +214,4 @@ class VoiceRecording(commands.Cog):
                 await asyncio.sleep(1)
                 
         except Exception as e:
-            with open('log.txt', 'a') as f:
-                f.write(f'Encountered an exception when playing response:\n{e}\n\n')
+            self.bot.log_handler.error(f'Encountered an exception when playing response:\n{e}')
