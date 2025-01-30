@@ -39,14 +39,14 @@ class OpenAIHandler:
         
         await interaction.response.send_message('{}'.format(self.status_messages['reset'].replace('{USERNAME}', interaction.user.display_name)))
     
-    async def generate(self, message: str, temp: float, freq_penalty: float, presence_penalty: float):
+    async def generate(self, message: str, temp: float=1.2, freq_penalty: float=0.9, presence_penalty: float=0.75):
         """Returns the contents of an OpenAI API call in response to a user message.
 
         Args:
             message (str): The message or content to generate a response to.
-            temp (float): The randomness of the output.
-            freq_penalty (float): How likely the reponse is to repeat words or phrases.
-            presence_penalty (float): How likely to introduce new topics to the conversation.
+            temp (float, optional): The randomness of the output.
+            freq_penalty (float, optional): How likely the reponse is to repeat words or phrases.
+            presence_penalty (float, optional): How likely to introduce new topics to the conversation.
 
         Returns:
             str: The response obtained, returns as a string.

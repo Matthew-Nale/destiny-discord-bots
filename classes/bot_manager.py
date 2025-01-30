@@ -16,6 +16,7 @@ from discord.ext import commands, tasks
 from log_handler import create_logger
 from voice_handler import ElevenLabsHandler
 from text_handler import OpenAIHandler
+from random_events import setup_cogs
 
 
 
@@ -78,7 +79,7 @@ class BotManager(commands.Bot):
             talk_chance (float): The chance for all random chances when talking through text or voice.
         """
         self.log_handler.debug(f'Adding RandomEvents cog to the bot.')
-        asyncio.run(self.add_cog(RandomEvents(self, talk_chance)))
+        asyncio.run(setup_cogs(self, TALK_CHANCE))
     
     def add_text_commands(self):
         """Adds all generic text commands to the bot."""
