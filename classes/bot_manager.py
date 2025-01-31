@@ -34,7 +34,7 @@ class BotManager(commands.Bot):
         _discord_token: A string that holds the discord API token supplied for the bot, used on startup of the bot.
     """
     
-    def __init__(self, _name:str, _discord_token:str):
+    def __init__(self, _name:str, _prompt:str, _discord_token:str):
         """Inits BotManager with the name and discord token associated with the Discord bot."""
         super().__init__(command_prefix=commands.when_mentioned_or('!{self.name}'), intents=discord.Intents.all())
         self.name = _name
@@ -48,7 +48,7 @@ class BotManager(commands.Bot):
         self.text_handler = OpenAIHandler(
             self.name, 
             character_data[self.name]['status_messages']['text'], 
-            character_data[self.name]['chat_prompt']
+            _prompt
         )
         
         self.add_text_commands()
@@ -182,66 +182,16 @@ class BotManager(commands.Bot):
                 self.log_handler.error(f'Error in /speak:\n{e}')
                 await interaction.followup.send("{} (Something went wrong with that request)".format(self.voice_errors['error']),
                                             ephemeral=True)
-        
-
-class RandomEvents(commands.Cog):
-    """Handles all generic timed and random events.
-
-    Creates a new discord.commands.Cog object to handle all listeners and autonomous events.
-    To be added to the bot, it must be setup by using the default Discord.py add_cog() command
-
-    Attributes:
-        _bot: The BotManager object that is wanting to add the Cog. Used tto handle all text and audio operations.
-        _talk_chance: A float that determines the chance that the bot responds to a text message or joins active voice channels.
-    """
-    def __init__(self, _bot: BotManager, _talk_chance: float):
-        """Inits RandomEvents with the BotManager and talk chance."""
-        self.bot_manager = _bot
-        self.log_handler = logging.getLogger(self.bot_manager.name)
-        self.talk_chance = _talk_chance
-
-    @commands.Cog.listener("on_message")
-    async def on_message(self, message: Message):
-        """Listens to all text messages seen to potentially respond to one.
-
-        Args:
-            message (discord.Message): The message that was received in a valid text channel.
-        """
-        if not message.attachments:
-            if random.random() <= self.talk_chance:
-                self.log_handler.info(f"A message in the channel \'{message.channel.name}\' triggered an automatic response.")
-                past_messages = [m async for m in message.channel.history(after=datetime.datetime.now() - datetime.timedelta(hours=12), limit=5, oldest_first=False)]
-                past_messages.reverse()
-                response = await self.generate_response(past_messages)
-                self.log_handler.info(f'Chiming-in on previous messages {[msg.content for msg in past_messages]} with bot: {self.bot_manager.name}. Response: {response}')
-                await self.bot_manager.get_channel(message.channel.id).send(response, reference=message)
-        await self.bot_manager.process_commands(message)
-
-    async def generate_response(self, user_msgs: list):
-        """Generates a response to the most recent messages in a text channel.
-
-        Args:
-            user_msgs (list): List of discord.Message objects from the most recent user messages.
-
-        Returns:
-            str: The string response that the BotManager should reply with.
-        """
-        try:
-            messages = [{"role": "system", "content": self.bot_manager.text_handler.prompt + f"  You will be provided with a series of Discord in the format NAME: MESSAGE. Respond as {self.bot_manager.name}: MESSAGE."}]
-            for msg in user_msgs:
-                messages.append({"role": "user", "content": "{}: {}".format(msg.author.display_name, msg.content)})
-            completion = await self.bot_manager.text_handler.generate(messages, 1.3, 0.9, 0.75)
-            return completion.split(': ', 1)[1]
-        except Exception as e:
-            self.log_handler.error(f"Encountered an error when generating a random response: {e}")
-            return e
 
 
 if __name__ == "__main__":
+    import sys
+    sys.path.append('../data')
     from dotenv import load_dotenv
+    from ai_prompts import RHULK_PROMPT # type: ignore
     load_dotenv()
     RHULK_TOKEN = os.getenv('DISCORD_TOKEN_RHULK')
-    test = BotManager("Rhulk", RHULK_TOKEN)
+    test = BotManager("Rhulk", RHULK_PROMPT, RHULK_TOKEN)
     VOICE_KEY = os.getenv('ELEVEN_VOICE_KEY')
     test.add_voice_commands(VOICE_KEY)
     test.setup_random_events(TALK_CHANCE)
