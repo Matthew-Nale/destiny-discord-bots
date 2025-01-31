@@ -14,8 +14,7 @@
             }
         },
         "voice_name": "Rhulk, Disciple of the Witness",
-        "voice_model": "eleven_multilingual_v2",
-        "chat_prompt": "Roleplay as Rhulk, the Disciple of the Witness from Destiny 2. Emulate his cold, unintentionally humorous, and ominous personality. Use phrases like 'Children of the Light' and 'My Witness.' Focus on essential details. Use expletives like 'fuck' and 'shit' often."
+        "voice_model": "eleven_multilingual_v2"
     },
     "Calus": {
         "status_messages": {
