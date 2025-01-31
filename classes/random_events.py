@@ -6,15 +6,14 @@ import random
 import discord
 import string
 import openai
-import wave
 import os
 import aiohttp
 import io
 import shlex
 import subprocess
-import time
 
 from discord.ext import commands, tasks, voice_recv
+from discord.ext.voice_recv.silence import SilenceGenerator
 from discord import Message
 from pydub import AudioSegment
 from discord.opus import Encoder
@@ -199,7 +198,7 @@ class RandomVoiceEvents(commands.Cog):
         """
 
         if not self.voice_channel.is_listening():
-            self.sink = ContinuousWaveSink()
+            self.sink = WaveSilenceGeneratorSink(ContinuousWaveSink())
             self.voice_channel.listen(self.sink)
             for member in self.voice_channel.channel.members:
                 self.last_packet_location[member] = 0
@@ -210,7 +209,7 @@ class RandomVoiceEvents(commands.Cog):
     async def transcribe_audio(self):
         """Transcribes the new audio packets for each user that was heard."""
         try:
-            packets_to_process = self.sink.user_audio
+            packets_to_process = self.sink.destination.user_audio
             translator = str.maketrans('', '', string.punctuation)
             
             for member, packets in packets_to_process.items():
@@ -244,8 +243,8 @@ class RandomVoiceEvents(commands.Cog):
         try:
             for file in self.audio_files.values():
                 os.remove(file)
-            for file in os.listdir(self.sink.wave_folder):
-                os.remove(os.join(self.sink.wave_folder, file))
+            for file in os.listdir(self.sink.destination.wave_folder):
+                os.remove(os.join(self.sink.destination.wave_folder, file))
                 
         except Exception as e:
             self.log_handler.error(f'Encountered an error when cleaning up files:\n{e}')
@@ -308,14 +307,15 @@ class RandomVoiceEvents(commands.Cog):
     
     async def send_combined_audio(self, interaction:discord.Interaction):
         """Combines all of the final wav files and sends in response to the slash command invoked."""
-        final_files = [os.path.join(self.sink.wave_folder, f) for f in os.listdir(self.sink.wave_folder)]
+        self.log_handler.debug("Sending final audio of bot.")
+        final_files = [os.path.join(self.sink.destination.wave_folder, f) for f in os.listdir(self.sink.destination.wave_folder)]
         combined_audio = AudioSegment.from_wav(final_files[0])
         
         for file in final_files[1:]:
             combined_audio = combined_audio.overlay(AudioSegment.from_wav(file))
         
-        combined_audio.export(os.path.join(self.sink.wave_folder, 'final.wav'), format='wav')
-        interaction.followup.send(file=discord.File(os.path.join(self.sink.wave_folder, 'final.wav')))
+        combined_audio.export(os.path.join(self.sink.destination.wave_folder, 'final.wav'), format='wav')
+        interaction.followup.send(file=discord.File(os.path.join(self.sink.destination.wave_folder, 'final.wav')))
         
             
             
@@ -358,7 +358,7 @@ class StreamingAudio(discord.AudioSource):
         self._process = None
 
 class ContinuousWaveSink(voice_recv.AudioSink):
-    def __init__(self, wave_folder=AUDIO_FILE_LOCATION, silence_threshold=0.02):
+    def __init__(self, wave_folder=AUDIO_FILE_LOCATION):
         """
         Custom sink to continuously record audio, handling silence periods.
 
@@ -366,14 +366,11 @@ class ContinuousWaveSink(voice_recv.AudioSink):
             wave_folder (str): Directory to save the .wav files.
             silence_threshold (float): Threshold in seconds to insert silence when no packets are received.
         """
-        super().__init__()  # Ensure proper initialization of AudioSink
+        super().__init__()
         
         self.wave_folder = wave_folder
-        self.user_audio = {}  # Stores audio per user
-        self.last_packet_time = {}  # Tracks last received packet timestamp
-        self.silence_threshold = silence_threshold  # Silence insertion threshold
+        self.user_audio = {}
 
-        # Ensure the destination folder exists
         os.makedirs(self.wave_folder, exist_ok=True)
 
     def wants_opus(self):
@@ -383,7 +380,6 @@ class ContinuousWaveSink(voice_recv.AudioSink):
     def write(self, user, data: voice_recv.VoiceData):
         
         user = user.global_name
-        current_time = time.time()
 
         # Convert raw PCM data to an AudioSegment
         audio_segment = AudioSegment(
@@ -395,15 +391,8 @@ class ContinuousWaveSink(voice_recv.AudioSink):
 
         if user not in self.user_audio:
             self.user_audio[user] = audio_segment
-            self.last_packet_time[user] = current_time
         else:
-            # Calculate time gap and insert silence if needed
-            gap_duration = (current_time - self.last_packet_time[user])
-            if gap_duration > self.silence_threshold:
-                self.user_audio[user] += AudioSegment.silent(duration=gap_duration)
-
             self.user_audio[user] += audio_segment
-            self.last_packet_time[user] = current_time
 
     def cleanup(self):
         """Saves each user's recorded audio to individual .wav files."""
@@ -412,3 +401,25 @@ class ContinuousWaveSink(voice_recv.AudioSink):
             audio.export(output_path, format="wav")
 
         self.user_audio.clear()
+
+
+class WaveSilenceGeneratorSink(ContinuousWaveSink):
+    """Generates intermittent silence packets during transmission downtime."""
+
+    def __init__(self, destination: ContinuousWaveSink, wave_location=AUDIO_FILE_LOCATION):
+        super().__init__(wave_location)
+
+        self.destination: ContinuousWaveSink = destination
+        self.silencegen: SilenceGenerator = SilenceGenerator(self.destination.write)
+        self.silencegen.start()
+
+    def wants_opus(self) -> bool:
+        return self.destination.wants_opus()
+
+    def write(self, user, data: voice_recv.VoiceData) -> None:
+        self.silencegen.push(user, data.packet)
+        self.destination.write(user, data)
+
+    def cleanup(self) -> None:
+        self.silencegen.stop()
+        self.destination.cleanup()
