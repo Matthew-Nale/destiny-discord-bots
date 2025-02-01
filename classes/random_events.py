@@ -11,6 +11,7 @@ import aiohttp
 import io
 import shlex
 import subprocess
+import wave
 
 from discord.ext import commands, tasks, voice_recv
 from discord.ext.voice_recv.silence import SilenceGenerator
@@ -159,7 +160,8 @@ class RandomVoiceEvents(commands.Cog):
             self.new_audio = {}
             self.last_packet_location = {}
             
-            for _ in range(random.randint(MIN_LISTENS, MAX_LISTENS)):
+            # for _ in range(random.randint(MIN_LISTENS, MAX_LISTENS)):
+            for _ in range(1):
                 self.log_handler.debug(f"Round {_ + 1} of listening to users.")
                 await self.listen_for(LISTEN_TIME)
                 self.log_handler.debug("Transcibing audio from all users.")
@@ -297,10 +299,17 @@ class RandomVoiceEvents(commands.Cog):
                                                  'Content-Type': 'application/json'},
                                         json=body) as r:
                     content = io.BytesIO(await r.read())
+                    current_time = self.sink.destination.get_packet_information()
+                    
                     self.voice_channel.play(StreamingAudio(content.read(), pipe=True))
+                    with open(os.path.join(AUDIO_FILE_LOCATION, f"{current_time}.wav"), mode='bx') as file:
+                        file.write(await r.read())
             
             while self.voice_channel.is_playing():
                 await asyncio.sleep(1)
+            
+            self.sink.destination.bot_audio[current_time] = f"{current_time}.wav"
+            
                 
         except Exception as e:
             self.log_handler.error(f'Encountered an exception when playing response:\n{e}')
@@ -370,6 +379,7 @@ class ContinuousWaveSink(voice_recv.AudioSink):
         
         self.wave_folder = wave_folder
         self.user_audio = {}
+        self.bot_audio = {}
 
         os.makedirs(self.wave_folder, exist_ok=True)
 
@@ -393,6 +403,11 @@ class ContinuousWaveSink(voice_recv.AudioSink):
             self.user_audio[user] = audio_segment
         else:
             self.user_audio[user] += audio_segment
+    
+    def get_packet_information(self):
+        """Grabs packet information"""
+        first_user = list(self.user_audio.values())[0]
+        return first_user.duration_seconds
 
     def cleanup(self):
         """Saves each user's recorded audio to individual .wav files."""
@@ -401,6 +416,7 @@ class ContinuousWaveSink(voice_recv.AudioSink):
             audio.export(output_path, format="wav")
 
         self.user_audio.clear()
+        self.bot_audio.clear()
 
 
 class WaveSilenceGeneratorSink(ContinuousWaveSink):
@@ -412,9 +428,6 @@ class WaveSilenceGeneratorSink(ContinuousWaveSink):
         self.destination: ContinuousWaveSink = destination
         self.silencegen: SilenceGenerator = SilenceGenerator(self.destination.write)
         self.silencegen.start()
-
-    def wants_opus(self) -> bool:
-        return self.destination.wants_opus()
 
     def write(self, user, data: voice_recv.VoiceData) -> None:
         self.silencegen.push(user, data.packet)
